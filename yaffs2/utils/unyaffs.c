@@ -30,7 +30,7 @@
 #define MAX_OBJECTS 10000
 #define YAFFS_OBJECTID_ROOT     1
 
-static int read_chunk();
+static int read_chunk(void);
 
 static unsigned char data[CHUNK_SIZE + SPARE_SIZE];
 static unsigned char *chunk_data = data;
@@ -40,7 +40,8 @@ static int img_file;
 static char *obj_list[MAX_OBJECTS];
 static void process_chunk(unyaffs_callback callback)
 {
-	int out_file, remain, s;
+	int out_file;
+    unsigned remain, s;
 	char *full_path_name;
 
 	yaffs_PackedTags2 *pt = (yaffs_PackedTags2 *)spare_data;
@@ -95,7 +96,7 @@ static void process_chunk(unyaffs_callback callback)
 }
 
 
-static int read_chunk()
+static int read_chunk(void)
 {
 	ssize_t s;
 	int ret = -1;
@@ -123,7 +124,6 @@ int unyaffs(char* filename, char* directory, unyaffs_callback callback)
 
 	memset(obj_list, sizeof(char*) * MAX_OBJECTS, 0);
 	obj_list[YAFFS_OBJECTID_ROOT] = ".";
-    int count = 0;
     char pwd[PATH_MAX];
     if (directory != NULL) 
     {
