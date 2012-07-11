@@ -32,6 +32,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <limits.h>
+
 #ifdef HAVE_SELINUX
 #define XATTR_NAME_SELINUX "security.selinux"
 #include <selinux/selinux.h>
@@ -49,6 +51,8 @@ static char *mntpoint;
 
 #include "yaffs_tagsvalidity.h"
 #include "yaffs_packedtags2.h"
+
+#include "mkyaffs2image.h"
 
 unsigned source_path_len = 0;
 unsigned yaffs_traceMask=0;
@@ -73,7 +77,7 @@ static objItem obj_list[MAX_OBJECTS];
 static int n_obj = 0;
 static int obj_id = YAFFS_NOBJECT_BUCKETS + 1;
 
-static int nObjects, nDirectories, nPages;
+//static int nObjects, nDirectories, nPages;
 
 static int outFile;
 
@@ -116,7 +120,6 @@ static void add_obj_to_list(dev_t dev, ino_t ino, int obj)
 	{
 		// oops! not enough space in the object array
 		fprintf(stderr,"Not enough space in object array\n");
-		exit(2);
 	}
 }
 
@@ -189,8 +192,6 @@ static void object_header_little_to_big_endian(yaffs_ObjectHeader* oh)
     oh->roomToGrow[1] = SWAP32(oh->roomToGrow[1]);
     oh->roomToGrow[2] = SWAP32(oh->roomToGrow[2]);
     oh->roomToGrow[3] = SWAP32(oh->roomToGrow[3]);
-    oh->roomToGrow[4] = SWAP32(oh->roomToGrow[4]);
-    oh->roomToGrow[5] = SWAP32(oh->roomToGrow[5]);
 #else
     oh->roomToGrow[0] = SWAP32(oh->roomToGrow[0]);
     oh->roomToGrow[1] = SWAP32(oh->roomToGrow[1]);
@@ -202,8 +203,6 @@ static void object_header_little_to_big_endian(yaffs_ObjectHeader* oh)
     oh->roomToGrow[7] = SWAP32(oh->roomToGrow[7]);
     oh->roomToGrow[8] = SWAP32(oh->roomToGrow[8]);
     oh->roomToGrow[9] = SWAP32(oh->roomToGrow[9]);
-    oh->roomToGrow[10] = SWAP32(oh->roomToGrow[10]);
-    oh->roomToGrow[11] = SWAP32(oh->roomToGrow[11]);
 #endif
 }
 
@@ -243,7 +242,7 @@ static int write_chunk(__u8 *data, __u32 objId, __u32 chunkId, __u32 nBytes)
 // added NCB **CHECK**
 	t.chunkUsed = 1;
 
-	nPages++;
+	//nPages++;
 
 	yaffs_PackTags2(pt,&t);
 
@@ -335,14 +334,14 @@ static void fix_stat(const char *path, struct stat *s)
     fs_config(path, S_ISDIR(s->st_mode), &s->st_uid, &s->st_gid, &s->st_mode);
 }
 
-static int process_directory(int parent, const char *path, int fixstats)
+static int process_directory(int parent, const char *path, int fixstats, mkyaffs2image_callback callback)
 {
 
 	DIR *dir;
 	struct dirent *entry;
 	char *secontext = NULL;
 
-	nDirectories++;
+	//nDirectories++;
 	
 	dir = opendir(path);
 	
@@ -355,7 +354,7 @@ static int process_directory(int parent, const char *path, int fixstats)
 			if(strcmp(entry->d_name,".") &&
 			   strcmp(entry->d_name,".."))
  			{
- 				char full_name[500];
+ 				char full_name[PATH_MAX];
 #ifdef HAVE_SELINUX
 				char *suffix, dest_name[500];
 				int ret;
@@ -401,7 +400,9 @@ static int process_directory(int parent, const char *path, int fixstats)
 				{
 				
 					newObj = obj_id++;
-					nObjects++;
+					if (callback != NULL)
+                        callback(full_name);
+					//nObjects++;
 
                     if (fixstats) {
                         fix_stat(full_name, &stats);
@@ -424,7 +425,7 @@ static int process_directory(int parent, const char *path, int fixstats)
 						if(S_ISLNK(stats.st_mode))
 						{
 					
-							char symname[500];
+							char symname[PATH_MAX];
 						
 							memset(symname,0, sizeof(symname));
 					
@@ -495,7 +496,7 @@ static int process_directory(int parent, const char *path, int fixstats)
 							//printf("directory\n");
 							error =  write_object_header(newObj, YAFFS_OBJECT_TYPE_DIRECTORY, &stats, parent, entry->d_name, -1, NULL, secontext);
 // NCB modified 10/9/2001				process_directory(1,full_name);
-							process_directory(newObj,full_name,fixstats);
+							process_directory(newObj,full_name,fixstats,callback);
 						}
 					}
 				}
@@ -510,6 +511,55 @@ static int process_directory(int parent, const char *path, int fixstats)
 	
 	return 0;
 
+}
+
+int mkyaffs2image(char* target_directory, char* filename, int fixstats, char *secontext, mkyaffs2image_callback callback)
+{
+	struct stat stats;
+	memset(obj_list, 0, sizeof(objItem) * MAX_OBJECTS);
+	n_obj = 0;
+	obj_id = YAFFS_NOBJECT_BUCKETS + 1;
+
+	if (stat(target_directory,&stats) < 0)
+		return -1;
+
+	outFile = open(filename,O_CREAT | O_TRUNC | O_WRONLY, S_IREAD | S_IWRITE);
+	
+	if(outFile < 0) {
+		fprintf(stderr,"Could not open output file %s\n",filename);
+		return -1;
+	}
+
+	if (fixstats) {
+		int len = strlen(target_directory);
+
+		if((len >= 4) && (!strcmp(target_directory + len - 4, "data"))) {
+			source_path_len = len - 4;
+		} else if((len >= 6) && (!strcmp(target_directory + len - 6, "system"))) {
+			source_path_len = len - 6;
+		} else {            
+			fprintf(stderr,"Fixstats (-f) option requested but filesystem is not data or android!\n");
+			return -1;
+		}
+		fix_stat(target_directory, &stats);
+	}
+
+	//printf("Processing directory %s into image file %s\n",argv[1],argv[2]);
+#ifdef HAVE_SELINUX
+    if (sehnd) {
+	    if (selabel_lookup(sehnd, &secontext, mntpoint, stats.st_mode) < 0) {
+		    perror("selabel_lookup");
+		    exit(1);
+	    }
+    }
+#endif
+
+	error =  write_object_header(1, YAFFS_OBJECT_TYPE_DIRECTORY, &stats, 1,"", -1, NULL, secontext);
+	if(error)
+		error = process_directory(YAFFS_OBJECTID_ROOT,target_directory,fixstats,callback);
+	
+	close(outFile);
+	return error < 0 ? error : 0;
 }
 
 static void usage(void)
@@ -610,46 +660,9 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 	
-	outFile = open(image,O_CREAT | O_TRUNC | O_WRONLY, S_IREAD | S_IWRITE);
+	error = mkyaffs2image(dir, image, fixstats, secontext, NULL);
 	
-	
-	if(outFile < 0)
-	{
-		fprintf(stderr,"Could not open output file %s\n",image);
-		exit(1);
-	}
-
-    if (fixstats) {
-        int len = strlen(dir);
-        
-        if((len >= 4) && (!strcmp(dir + len - 4, "data"))) {
-            source_path_len = len - 4;
-        } else if((len >= 6) && (!strcmp(dir + len - 6, "system"))) {
-            source_path_len = len - 6;
-        } else {            
-            fprintf(stderr,"Fixstats (-f) option requested but filesystem is not data or android!\n");
-            exit(1);
-        }
-        fix_stat(dir, &stats);
-    }
-    
-	//printf("Processing directory %s into image file %s\n",dir,image);
-#ifdef HAVE_SELINUX
-    if (sehnd) {
-	    if (selabel_lookup(sehnd, &secontext, mntpoint, stats.st_mode) < 0) {
-		    perror("selabel_lookup");
-		    exit(1);
-	    }
-    }
-#endif
-
-    error =  write_object_header(1, YAFFS_OBJECT_TYPE_DIRECTORY, &stats, 1,"", -1, NULL, secontext);
-	if(error)
-	error = process_directory(YAFFS_OBJECTID_ROOT,dir,fixstats);
-	
-	close(outFile);
-	
-	if(error < 0)
+	if(error != 0)
 	{
 		perror("operation incomplete");
 		exit(1);
